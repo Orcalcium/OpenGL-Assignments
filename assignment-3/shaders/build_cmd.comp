@@ -1,0 +1,24 @@
+#version 460 core
+layout(local_size_x = 1) in; // mesh count is tiny
+struct IndirectCmd { uint count; uint instanceCount; uint firstIndex; uint baseVertex; uint baseInstance; };
+layout(std430, binding = 3) buffer Counters { uint counts[]; }; // counts[0..meshCount-1] visible per mesh, counts[meshCount] total
+layout(std430, binding = 4) buffer IndirectOut { IndirectCmd cmds[]; };
+layout(std430, binding = 5) buffer MeshInfo { uint meshIndexCounts[]; }; // packed: for each mesh: indexCount, firstIndex, baseVertex
+uniform uint uMeshCount;
+void main(){
+    if(gl_GlobalInvocationID.x>0) return; // single thread builds all
+    uint prefix = 0;
+    for(uint i=0;i<uMeshCount;i++){
+        uint vis = counts[i];
+        uint idxCount = meshIndexCounts[i*3+0];
+        uint firstIdx = meshIndexCounts[i*3+1];
+        uint baseV   = meshIndexCounts[i*3+2];
+        IndirectCmd c; c.count = idxCount;
+        c.instanceCount = vis;
+        c.firstIndex = firstIdx;
+        c.baseVertex = baseV;
+        c.baseInstance = prefix;
+        cmds[i] = c;
+        prefix += vis;
+    }
+}

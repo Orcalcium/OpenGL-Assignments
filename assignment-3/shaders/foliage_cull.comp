@@ -1,0 +1,46 @@
+#version 450 core
+
+layout(local_size_x = 128) in;
+struct GPUInstancePacked { mat4 model; vec4 info; };
+layout(std430, binding = 0) buffer SourceInstances { GPUInstancePacked sourceInstances[]; };
+layout(std430, binding = 1) buffer TargetInstances { GPUInstancePacked targetInstances[]; };
+
+// binding = 3: per-mesh visible counts (atomically incremented)
+layout(std430, binding = 3) buffer VisibleCounts { uint visibleCounts[]; };
+
+// Uniforms
+uniform mat4 uView;
+uniform mat4 uProj;
+uniform uint uTotalInstances;
+uniform uint uMeshCount;
+uniform vec3 uPlayerPos;
+uniform float uCullDistance; // distance cull threshold
+
+// Per-mesh base offsets & capacities (only first uMeshCount entries used)
+uniform uint uBaseOffsets[16];
+uniform uint uCapacities[16];
+
+// Cheap frustum test (approximate) against clip volume
+bool frustumCull(vec3 pos){
+    vec4 clip = uProj * uView * vec4(pos,1.0);
+    if(abs(clip.x) > clip.w) return true;
+    if(abs(clip.y) > clip.w) return true;
+    if(clip.z < -clip.w || clip.z > clip.w) return true;
+    return false;
+}
+void main(){
+    uint gid = gl_GlobalInvocationID.x;
+    if(gid >= uTotalInstances) return;
+    GPUInstancePacked inst = sourceInstances[gid];
+    uint meshType = uint(inst.info.y + 0.5);
+    if(meshType >= uMeshCount) return; // safety
+    vec3 pos = inst.model[3].xyz;
+    bool culled = frustumCull(pos);
+    if(!culled && distance(pos, uPlayerPos) > uCullDistance) culled = true;
+    if(culled) return;
+    uint localIndex = atomicAdd(visibleCounts[meshType], 1);
+    uint capacity = uCapacities[meshType];
+    if(localIndex >= capacity) return; // overflow guard
+    uint dstIndex = uBaseOffsets[meshType] + localIndex;
+    targetInstances[dstIndex] = inst;
+}
